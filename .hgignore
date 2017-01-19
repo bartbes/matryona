@@ -1,0 +1,7 @@
+^a\.out$
+\.webm$
+\.mkv$
+^\..*\.swp$
+^test$
+\.d$
+\.o$
