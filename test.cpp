@@ -1,7 +1,7 @@
 #include <cstdio>
 #include <stdexcept>
 
-#include "matryona.h"
+#include <matryona/matryona.h>
 
 using namespace std;
 using namespace matryona;

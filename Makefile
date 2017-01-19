@@ -1,4 +1,5 @@
 CXX=clang++
+CPPFLAGS=-I.
 CXXFLAGS=-std=c++11 -g -O2 -Wall -Wextra
 LDFLAGS=-flto
 LINK.o=$(CXX)
@@ -17,6 +18,6 @@ clean:
 test: $(OBJS)
 
 %.d: %.cpp
-	$(CXX) $(CXXFLAGS) -MM -MP -o $@ $<
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MM -MP -o $@ $<
 
 -include $(DEPS)
