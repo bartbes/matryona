@@ -2,7 +2,12 @@ CXX=clang++
 CPPFLAGS=-I.
 CXXFLAGS=-std=c++11 -g -O2 -Wall -Wextra
 LDFLAGS=-flto
+LDADD=-lvpx
 V=0
+
+SOURCES=$(wildcard *.cpp)
+OBJS=$(SOURCES:.cpp=.o)
+DEPS=$(SOURCES:.cpp=.d)
 
 ifeq ($(V),1)
 	SILENT=@\#
@@ -11,10 +16,6 @@ else
 	SILENT=@printf " %-5s $@\n"
 	VERBOSE=@
 endif
-
-SOURCES=$(wildcard *.cpp)
-OBJS=$(SOURCES:.cpp=.o)
-DEPS=$(SOURCES:.cpp=.d)
 
 .PHONY: all clean
 
