@@ -72,6 +72,32 @@ T readUint(std::uint64_t len, IO *io)
 	return swapEndianness(value);
 }
 
+template <typename T>
+struct equivalent_sized_uint
+{
+};
+
+template <>
+struct equivalent_sized_uint<float>
+{
+	typedef std::uint32_t type;
+};
+
+template <>
+struct equivalent_sized_uint<double>
+{
+	typedef std::uint64_t type;
+};
+
+template <typename T = float>
+T readFloat(std::uint64_t len, IO *io)
+{
+	typedef typename equivalent_sized_uint<T>::type U;
+	char buffer[sizeof(T)];
+	*reinterpret_cast<U*>(buffer) = readUint<U>(len, io);
+	return *reinterpret_cast<T*>(buffer);
+}
+
 class CIO : public IO
 {
 public:

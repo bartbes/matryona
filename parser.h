@@ -25,6 +25,7 @@ struct StreamInfo
 	StreamType type;
 	std::uint64_t id;
 	std::uint64_t trackNumber;
+	std::uint64_t defaultDuration;
 	bool isEnabled;
 	bool isDefault;
 };
@@ -38,7 +39,7 @@ public:
 	std::size_t getNumStreams() const;
 	const StreamInfo &getStreamInfo(std::size_t stream) const;
 
-	bool readData(std::uint64_t stream, std::uint8_t *&data, std::uint64_t &size);
+	bool readData(std::uint64_t stream, std::uint8_t *&data, std::uint64_t &size, std::uint64_t &timecode, std::uint64_t &duration);
 
 private:
 	struct StreamState;

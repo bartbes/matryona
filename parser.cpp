@@ -81,6 +81,7 @@ struct Parser::StreamState
 	uint64_t clusterTimecode;
 	uint8_t *buffer;
 	uint64_t bufferSize;
+	float timecodeScale;
 };
 
 Parser::StreamState::StreamState()
@@ -89,6 +90,7 @@ Parser::StreamState::StreamState()
 	, firstCluster(true)
 	, buffer(nullptr)
 	, bufferSize(0)
+	, timecodeScale(1)
 {
 }
 
@@ -138,31 +140,39 @@ void Parser::readHeader()
 		info.type = typeFromId(readUint(codecId.size, &codecId.io));
 		info.id = readUint(trackUid.size, &trackUid.io);
 		info.trackNumber = readUint(trackNumber.size, &trackNumber.io);
+		info.defaultDuration = 0;
 		info.isDefault = true;
 		info.isEnabled = true; 
 
-		// Handle optional flags
+		StreamState state;
+		state.clusterIt = EBMLElementIterator(&segment.io);
+
+		// Handle optional data
 		for (EBMLElementIterator j(&it->io); j != EBMLElementIterator::end; ++j)
 		{
 			if (j->id == id::FlagDefault)
 				info.isDefault = readUint(j->size, &j->io) == 1;
 			if (j->id == id::FlagEnabled)
 				info.isEnabled = readUint(j->size, &j->io) == 1;
+			if (j->id == id::DefaultDuration)
+				info.defaultDuration = readUint(j->size, &j->io);
+			if (j->id == id::TrackTimecodeScale)
+				state.timecodeScale = readFloat(j->size, &j->io);
 		}
 
 		streams.push_back(info);
-		StreamState state;
-		state.clusterIt = EBMLElementIterator(&segment.io);
 		states.push_back(state);
 	}
 }
 
-bool Parser::readData(uint64_t stream, uint8_t *&data, uint64_t &size)
+bool Parser::readData(uint64_t stream, uint8_t *&data, uint64_t &size, uint64_t &timecode, uint64_t &duration)
 {
+	// TODO: Prefix stream with CodecPrivate data
 	StreamInfo &info = streams[stream];
 	StreamState &state = states[stream];
 	EBMLElement block;
 	uint64_t trackNumber;
+	duration = info.defaultDuration;
 
 	do
 	{
@@ -192,7 +202,11 @@ bool Parser::readData(uint64_t stream, uint8_t *&data, uint64_t &size)
 
 		block = *state.blockIt;
 		if (block.id == id::BlockGroup)
+		{
+			EBMLElement blockDuration = findElement(&block.io, id::BlockDuration);
+			duration = readUint(blockDuration.size, &blockDuration.io);
 			block = findElement(&state.blockIt->io, id::Block);
+		}
 		trackNumber = readVint(&block.io);
 	} while (trackNumber != info.trackNumber);
 
@@ -201,6 +215,9 @@ bool Parser::readData(uint64_t stream, uint8_t *&data, uint64_t &size)
 		throw IOError();
 	// FIXME: Do this only if little endian
 	timeOffset = swapEndianness(timeOffset);
+
+	// TODO: Figure out what to do with timecodeScale.
+	timecode = state.clusterTimecode + timeOffset;
 
 	uint8_t flags;
 	if (block.io.read(reinterpret_cast<char*>(&flags), 1) != 1)
