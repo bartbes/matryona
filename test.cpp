@@ -40,8 +40,8 @@ int main(int argc, char **argv)
 	vpx_codec_dec_init(&context, vpx_codec_vp8_dx(), nullptr, 0);
 
 	uint8_t *buffer;
-	uint64_t size;
-	p.readData(target, buffer, size);
+	uint64_t size, timecode, duration;
+	p.readData(target, buffer, size, timecode, duration);
 	vpx_codec_decode(&context, buffer, size, nullptr, 0);
 
 	vpx_codec_iter_t iter = nullptr;
@@ -52,11 +52,11 @@ int main(int argc, char **argv)
 	printf("Got a frame!\n");
 	printf("%dx%d\n", currentFrame->d_w, currentFrame->d_h);
 
-	for (int y = 0; y < currentFrame->d_h; ++y)
+	for (unsigned int y = 0; y < currentFrame->d_h; ++y)
 		fwrite(currentFrame->planes[0] + currentFrame->stride[0]*y, currentFrame->d_w, 1, stderr);
-	for (int y = 0; y < currentFrame->d_h/2; ++y)
+	for (unsigned int y = 0; y < currentFrame->d_h/2; ++y)
 		fwrite(currentFrame->planes[1] + currentFrame->stride[1]*y, currentFrame->d_w/2, 1, stderr);
-	for (int y = 0; y < currentFrame->d_h/2; ++y)
+	for (unsigned int y = 0; y < currentFrame->d_h/2; ++y)
 		fwrite(currentFrame->planes[2] + currentFrame->stride[2]*y, currentFrame->d_w/2, 1, stderr);
 
 	vpx_codec_destroy(&context);
