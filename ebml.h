@@ -77,6 +77,7 @@ namespace id
 	const uint64_t DefaultDuration = 0x3E383;
 	const uint64_t TrackTimecodeScale = 0x3314F;
 	const uint64_t BlockDuration = 0x1B;
+	const uint64_t CodecPrivate = 0x23A2;
 } // id
 
 } // matryona

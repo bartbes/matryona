@@ -188,6 +188,25 @@ void Parser::readHeader()
 				info.defaultDuration = readUint(j->size, &j->io);
 			if (j->id == id::TrackTimecodeScale)
 				state.timecodeScale = readFloat(j->size, &j->io);
+			if (j->id == id::CodecPrivate && info.type == VIDEO_THEORA)
+			{
+				// Theora uses Xiph style lacing in the CodecPrivate field
+				// We can reuse the existing lacing code by pretending this is a block
+				state.block = *j;
+				uint8_t frameCount;
+				if (state.block.io.read(reinterpret_cast<char*>(&frameCount), 1) != 1)
+					throw IOError();
+
+				state.subpacketPos = 0;
+				state.subpackets = frameCount+1;
+
+				state.blockSize = state.block.io.getLength() - state.block.io.tell();
+				state.grow(state.blockSize);
+				if (state.block.io.read(reinterpret_cast<char*>(state.buffer), state.blockSize) != state.blockSize)
+					throw IOError();
+
+				state.lacing = StreamState::LACING_XIPH;
+			}
 		}
 
 		streams.push_back(info);
@@ -197,7 +216,6 @@ void Parser::readHeader()
 
 bool Parser::readData(uint64_t stream, uint8_t *&data, uint64_t &size, uint64_t &timecode, uint64_t &duration)
 {
-	// TODO: Prefix stream with CodecPrivate data
 	StreamState &state = states[stream];
 
 	// In case we have CodecPrivate data (that we know how to use), the state is
