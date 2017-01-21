@@ -76,6 +76,8 @@ struct Parser::StreamState
 {
 	StreamState();
 	~StreamState();
+	StreamState(const StreamState &other) = delete;
+	StreamState(StreamState &&other);
 
 	// Make sure the buffer is at least 'size' long
 	void grow(uint64_t size);
@@ -130,15 +132,34 @@ Parser::StreamState::StreamState()
 {
 }
 
+Parser::StreamState::StreamState(StreamState &&other)
+	: clusterIt(other.clusterIt)
+	, blockIt(other.blockIt)
+	, firstCluster(other.firstCluster)
+	, buffer(other.buffer)
+	, bufferSize(other.bufferSize)
+	, timecodeScale(other.timecodeScale)
+	, clusterTimecode(other.clusterTimecode)
+	, timecode(other.timecode)
+	, duration(other.duration)
+	, blockSize(other.blockSize)
+	, subpacketPos(other.subpacketPos)
+	, subpackets(other.subpackets)
+	, lacing(other.lacing)
+{
+	other.buffer = nullptr;
+	other.bufferSize = 0;
+}
+
 Parser::StreamState::~StreamState()
 {
-	delete buffer;
+	delete[] buffer;
 }
 
 void Parser::StreamState::grow(uint64_t size)
 {
 	if (bufferSize < size)
-		delete buffer;
+		delete[] buffer;
 	buffer = new uint8_t[bufferSize = size];
 }
 
@@ -224,7 +245,7 @@ void Parser::readHeader()
 		}
 
 		streams.push_back(info);
-		states.push_back(state);
+		states.push_back(std::move(state));
 	}
 }
 
