@@ -256,7 +256,7 @@ bool Parser::readData(uint64_t stream, uint8_t *&data, uint64_t &size, uint64_t 
 	// In case we have CodecPrivate data (that we know how to use), the state is
 	// set up to match that data.
 	// Otherwise, subpacketPos = subpacks = 1, and we start by reading a block.
-	if (state.subpacketPos++ >= state.subpackets)
+	if (state.subpacketPos >= state.subpackets)
 		if (!readBlock(stream))
 			return false;
 
@@ -270,7 +270,7 @@ bool Parser::readData(uint64_t stream, uint8_t *&data, uint64_t &size, uint64_t 
 		// No lacing means 1 block is 1 "datum", usually one frame
 		data = state.buffer;
 		size = state.blockSize;
-		return true;
+		break;
 	case StreamState::LACING_XIPH:
 	{
 		// Walk the size data until we got to our subpacket's size
@@ -281,7 +281,7 @@ bool Parser::readData(uint64_t stream, uint8_t *&data, uint64_t &size, uint64_t 
 		{
 			uint8_t sz = *readPtr;
 			offset += sz;
-			if (sz == 0)
+			if (sz < 255)
 				++seen;
 		}
 
@@ -294,15 +294,17 @@ bool Parser::readData(uint64_t stream, uint8_t *&data, uint64_t &size, uint64_t 
 		// finish to advance readPtr
 		if (state.subpacketPos + 1 != state.subpackets)
 		{
+			size = 0;
 			for (; readPtr < state.buffer + state.bufferSize; ++readPtr)
 			{
 				uint8_t sz = *readPtr;
 				size += sz;
-				if (sz == 0)
+				if (sz < 255)
 					break;
 			}
+			++readPtr;
 			for (ssize_t seen = state.subpacketPos + 1; seen < state.subpackets - 1 && readPtr < state.buffer + state.bufferSize; ++readPtr)
-				if (*readPtr == 0)
+				if (*readPtr < 255)
 					++seen;
 		}
 		else
@@ -318,7 +320,7 @@ bool Parser::readData(uint64_t stream, uint8_t *&data, uint64_t &size, uint64_t 
 		if (data + size > state.buffer + state.bufferSize)
 			throw IOError();
 
-		return true;
+		break;
 	}
 	case StreamState::LACING_EBML:
 		throw InvalidFileFormatError("File uses EBML lacing, which is not yet implemented");
@@ -326,8 +328,11 @@ bool Parser::readData(uint64_t stream, uint8_t *&data, uint64_t &size, uint64_t 
 		// Fixed size lacing is also simple, all blocks are constant size
 		size = state.blockSize/state.subpackets;
 		data = state.buffer + state.subpacketPos * size;
-		return true;
+		break;
 	}
+
+	++state.subpacketPos;
+	return true;
 }
 
 bool Parser::readBlock(uint64_t stream)
