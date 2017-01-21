@@ -50,6 +50,7 @@ private:
 	EBMLElement segment;
 
 	void readHeader();
+	bool readBlock(std::uint64_t stream);
 };
 
 } // matryona

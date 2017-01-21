@@ -4,6 +4,8 @@
 
 using std::size_t;
 using std::uint64_t;
+using std::uint8_t;
+using std::int8_t;
 
 static const uint64_t Codec_Audio_Vorbis = 0x534942524f565f41;
 static const uint64_t Codec_Video_Vp8 = 0x3850565f56;
@@ -74,6 +76,7 @@ struct Parser::StreamState
 {
 	StreamState();
 	~StreamState();
+	void grow(uint64_t size);
 
 	EBMLElementIterator clusterIt;
 	EBMLElementIterator blockIt;
@@ -82,6 +85,20 @@ struct Parser::StreamState
 	uint8_t *buffer;
 	uint64_t bufferSize;
 	float timecodeScale;
+	uint64_t timecode;
+	uint64_t duration;
+
+	EBMLElement block;
+	size_t blockSize;
+	ssize_t subpacketPos;
+	ssize_t subpackets;
+
+	enum {
+		LACING_NONE,
+		LACING_EBML,
+		LACING_XIPH,
+		LACING_FIXED,
+	} lacing;
 };
 
 Parser::StreamState::StreamState()
@@ -91,12 +108,25 @@ Parser::StreamState::StreamState()
 	, buffer(nullptr)
 	, bufferSize(0)
 	, timecodeScale(1)
+	, timecode(0)
+	, duration(0)
+	, blockSize(0)
+	, subpacketPos(1)
+	, subpackets(1)
+	, lacing(LACING_NONE)
 {
 }
 
 Parser::StreamState::~StreamState()
 {
 	delete buffer;
+}
+
+void Parser::StreamState::grow(uint64_t size)
+{
+	if (bufferSize < size)
+		delete buffer;
+	buffer = new uint8_t[bufferSize = size];
 }
 
 void Parser::readHeader()
@@ -168,11 +198,89 @@ void Parser::readHeader()
 bool Parser::readData(uint64_t stream, uint8_t *&data, uint64_t &size, uint64_t &timecode, uint64_t &duration)
 {
 	// TODO: Prefix stream with CodecPrivate data
+	StreamState &state = states[stream];
+
+	// In case we have CodecPrivate data (that we know how to use), the state is
+	// set up to match that data.
+	// Otherwise, subpacketPos = subpacks = 1, and we start by reading a block.
+	if (state.subpacketPos >= state.subpackets)
+		if (!readBlock(stream))
+			return false;
+
+	timecode = state.timecode;
+	duration = state.duration;
+	++state.subpacketPos;
+
+	switch(state.lacing)
+	{
+	case StreamState::LACING_NONE:
+		data = state.buffer;
+		size = state.blockSize;
+		return true;
+	case StreamState::LACING_XIPH:
+	{
+		// Walk the size data until we got to our subpacket's size
+		// Keep track of the offset so far, that marks the start of the subpacket
+		uint64_t offset = 0;
+		uint8_t *readPtr = state.buffer;
+		for (ssize_t seen = 0; seen < state.subpacketPos && readPtr < state.buffer + state.bufferSize; ++readPtr)
+		{
+			uint8_t sz = *readPtr;
+			offset += sz;
+			if (sz == 0)
+				++seen;
+		}
+
+		// If we hit the end, abort
+		if (readPtr >= state.buffer + state.bufferSize)
+			throw IOError();
+
+		// If this is the last subpacket, the size is the remainder,
+		// otherwise, read one more xiph-style length for the size, then
+		// finish to advance readPtr
+		if (state.subpacketPos + 1 != state.subpackets)
+		{
+			for (; readPtr < state.buffer + state.bufferSize; ++readPtr)
+			{
+				uint8_t sz = *readPtr;
+				size += sz;
+				if (sz == 0)
+					break;
+			}
+			for (ssize_t seen = state.subpacketPos + 1; seen < state.subpackets - 1 && readPtr < state.buffer + state.bufferSize; ++readPtr)
+				if (*readPtr == 0)
+					++seen;
+		}
+		else
+			size = state.bufferSize - (readPtr - state.buffer) - offset;
+
+		// Again, abort if we hit the end
+		if (readPtr >= state.buffer + state.bufferSize)
+			throw IOError();
+
+		data = readPtr + offset;
+
+		// One last sanity check
+		if (data + size > state.buffer + state.bufferSize)
+			throw IOError();
+
+		return true;
+	}
+	case StreamState::LACING_EBML:
+		throw InvalidFileFormatError("File uses EBML lacing, which is not yet implemented");
+	case StreamState::LACING_FIXED:
+		size = state.blockSize/state.subpackets;
+		data = state.buffer + state.subpacketPos * size;
+		return true;
+	}
+}
+
+bool Parser::readBlock(uint64_t stream)
+{
 	StreamInfo &info = streams[stream];
 	StreamState &state = states[stream];
-	EBMLElement block;
 	uint64_t trackNumber;
-	duration = info.defaultDuration;
+	state.duration = info.defaultDuration;
 
 	do
 	{
@@ -200,44 +308,61 @@ bool Parser::readData(uint64_t stream, uint8_t *&data, uint64_t &size, uint64_t 
 				}
 		}
 
-		block = *state.blockIt;
-		if (block.id == id::BlockGroup)
+		state.block = *state.blockIt;
+		if (state.block.id == id::BlockGroup)
 		{
-			EBMLElement blockDuration = findElement(&block.io, id::BlockDuration);
-			duration = readUint(blockDuration.size, &blockDuration.io);
-			block = findElement(&state.blockIt->io, id::Block);
+			EBMLElement blockDuration = findElement(&state.block.io, id::BlockDuration);
+			state.duration = readUint(blockDuration.size, &blockDuration.io);
+			state.block = findElement(&state.blockIt->io, id::Block);
 		}
-		trackNumber = readVint(&block.io);
+		trackNumber = readVint(&state.block.io);
 	} while (trackNumber != info.trackNumber);
 
 	int16_t timeOffset;
-	if (block.io.read(reinterpret_cast<char*>(&timeOffset), 2) != 2)
+	if (state.block.io.read(reinterpret_cast<char*>(&timeOffset), 2) != 2)
 		throw IOError();
 	// FIXME: Do this only if little endian
 	timeOffset = swapEndianness(timeOffset);
 
 	// TODO: Figure out what to do with timecodeScale.
-	timecode = state.clusterTimecode + timeOffset;
+	state.timecode = state.clusterTimecode + timeOffset;
 
 	uint8_t flags;
-	if (block.io.read(reinterpret_cast<char*>(&flags), 1) != 1)
+	if (state.block.io.read(reinterpret_cast<char*>(&flags), 1) != 1)
 		throw IOError();
 
 	// TODO: lacing support
-	if (flags & 0x06)
-		throw InvalidFileFormatError("File uses lacing, which is not yet implemented");
-
-	size = block.io.getLength() - block.io.tell();
-	if (state.bufferSize < size)
+	switch ((flags & 0x06) >> 1)
 	{
-		delete state.buffer;
-		state.buffer = new uint8_t[state.bufferSize = size];
+	case 0b00:
+		state.lacing = StreamState::LACING_NONE;
+		break;
+	case 0b01:
+		state.lacing = StreamState::LACING_XIPH;
+		break;
+	case 0b10:
+		state.lacing = StreamState::LACING_FIXED;
+		break;
+	case 0b11:
+		throw InvalidFileFormatError("File uses EBML lacing, which is not yet implemented");
+	default:
+		throw InvalidFileFormatError("Invalid lacing specified");
 	}
 
-	if (block.io.read(reinterpret_cast<char*>(state.buffer), size) != size)
+	if (state.lacing != StreamState::LACING_NONE)
+	{
+		uint8_t frameCount;
+		if (state.block.io.read(reinterpret_cast<char*>(&frameCount), 1) != 1)
+			throw IOError();
+		state.subpacketPos = 0;
+		state.subpackets = frameCount+1;
+	}
+
+	state.blockSize = state.block.io.getLength() - state.block.io.tell();
+	state.grow(state.blockSize);
+	if (state.block.io.read(reinterpret_cast<char*>(state.buffer), state.blockSize) != state.blockSize)
 		throw IOError();
 
-	data = state.buffer;
 	return true;
 }
 
