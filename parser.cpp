@@ -76,18 +76,30 @@ struct Parser::StreamState
 {
 	StreamState();
 	~StreamState();
+
+	// Make sure the buffer is at least 'size' long
 	void grow(uint64_t size);
 
+	// Our position in the file
 	EBMLElementIterator clusterIt;
 	EBMLElementIterator blockIt;
 	bool firstCluster;
-	uint64_t clusterTimecode;
+
+	// Our grow-only per-stream buffer
 	uint8_t *buffer;
 	uint64_t bufferSize;
+
+	// Track info
 	float timecodeScale;
+
+	// Cluster info
+	uint64_t clusterTimecode;
+
+	// Block info, saved because of lacing
 	uint64_t timecode;
 	uint64_t duration;
 
+	// Our position in the block, for lacing
 	EBMLElement block;
 	size_t blockSize;
 	ssize_t subpacketPos;
@@ -108,6 +120,7 @@ Parser::StreamState::StreamState()
 	, buffer(nullptr)
 	, bufferSize(0)
 	, timecodeScale(1)
+	, clusterTimecode(0)
 	, timecode(0)
 	, duration(0)
 	, blockSize(0)
@@ -192,6 +205,7 @@ void Parser::readHeader()
 			{
 				// Theora uses Xiph style lacing in the CodecPrivate field
 				// We can reuse the existing lacing code by pretending this is a block
+				// See readData and readBlock for more info on lacing
 				state.block = *j;
 				uint8_t frameCount;
 				if (state.block.io.read(reinterpret_cast<char*>(&frameCount), 1) != 1)
@@ -221,17 +235,18 @@ bool Parser::readData(uint64_t stream, uint8_t *&data, uint64_t &size, uint64_t 
 	// In case we have CodecPrivate data (that we know how to use), the state is
 	// set up to match that data.
 	// Otherwise, subpacketPos = subpacks = 1, and we start by reading a block.
-	if (state.subpacketPos >= state.subpackets)
+	if (state.subpacketPos++ >= state.subpackets)
 		if (!readBlock(stream))
 			return false;
 
+	// We know the timecode and duration, which is per-block
 	timecode = state.timecode;
 	duration = state.duration;
-	++state.subpacketPos;
 
 	switch(state.lacing)
 	{
 	case StreamState::LACING_NONE:
+		// No lacing means 1 block is 1 "datum", usually one frame
 		data = state.buffer;
 		size = state.blockSize;
 		return true;
@@ -287,6 +302,7 @@ bool Parser::readData(uint64_t stream, uint8_t *&data, uint64_t &size, uint64_t 
 	case StreamState::LACING_EBML:
 		throw InvalidFileFormatError("File uses EBML lacing, which is not yet implemented");
 	case StreamState::LACING_FIXED:
+		// Fixed size lacing is also simple, all blocks are constant size
 		size = state.blockSize/state.subpackets;
 		data = state.buffer + state.subpacketPos * size;
 		return true;
@@ -302,21 +318,27 @@ bool Parser::readBlock(uint64_t stream)
 
 	do
 	{
+		// Advance to the next block, either a BlockGroup or a SimpleBlock
 		++state.blockIt;
 		state.blockIt.until(id::BlockGroup, id::SimpleBlock);
 
+		// If there is no such block in this Cluster, go to the next cluster
 		while (state.blockIt == EBMLElementIterator::end)
 		{
+			// In case we haven't read this Cluster yet, do that first
 			if (!state.firstCluster)
 				++state.clusterIt;
 			state.firstCluster = false;
 			state.clusterIt.until(id::Cluster);
 
+			// If there are no more Clusters, we're done, no more blocks.
 			if (state.clusterIt == EBMLElementIterator::end)
 				return false;
 
+			// Initialise our blockIterator, in this new Cluster
 			state.blockIt = EBMLElementIterator(&state.clusterIt->io).until(id::BlockGroup, id::SimpleBlock);
 
+			// Find the optional cluster TimeCode
 			state.clusterTimecode = 0;
 			for (EBMLElementIterator it(&state.clusterIt->io); it != EBMLElementIterator::end; ++it)
 				if (it->id == id::Timecode)
@@ -326,16 +348,21 @@ bool Parser::readBlock(uint64_t stream)
 				}
 		}
 
+		// We have a new block, is it a SimpleBlock or a BlockGroup?
 		state.block = *state.blockIt;
 		if (state.block.id == id::BlockGroup)
 		{
+			// If it's a BlockGroup we get its duration, then navigate to its Block
 			EBMLElement blockDuration = findElement(&state.block.io, id::BlockDuration);
 			state.duration = readUint(blockDuration.size, &blockDuration.io);
 			state.block = findElement(&state.blockIt->io, id::Block);
 		}
+
+		// Read the track number of this block, if it doesn't match, try again
 		trackNumber = readVint(&state.block.io);
 	} while (trackNumber != info.trackNumber);
 
+	// We now have a Block! Read the time offset
 	int16_t timeOffset;
 	if (state.block.io.read(reinterpret_cast<char*>(&timeOffset), 2) != 2)
 		throw IOError();
@@ -345,11 +372,12 @@ bool Parser::readBlock(uint64_t stream)
 	// TODO: Figure out what to do with timecodeScale.
 	state.timecode = state.clusterTimecode + timeOffset;
 
+	// Read the flags
 	uint8_t flags;
 	if (state.block.io.read(reinterpret_cast<char*>(&flags), 1) != 1)
 		throw IOError();
 
-	// TODO: lacing support
+	// Lacing, woo
 	switch ((flags & 0x06) >> 1)
 	{
 	case 0b00:
@@ -367,6 +395,7 @@ bool Parser::readBlock(uint64_t stream)
 		throw InvalidFileFormatError("Invalid lacing specified");
 	}
 
+	// If there is any kind of lacing, we first get a frameCount (-1)
 	if (state.lacing != StreamState::LACING_NONE)
 	{
 		uint8_t frameCount;
@@ -376,6 +405,7 @@ bool Parser::readBlock(uint64_t stream)
 		state.subpackets = frameCount+1;
 	}
 
+	// Now the remainder is the actual data, possibly with laced subpacket sizes
 	state.blockSize = state.block.io.getLength() - state.block.io.tell();
 	state.grow(state.blockSize);
 	if (state.block.io.read(reinterpret_cast<char*>(state.buffer), state.blockSize) != state.blockSize)

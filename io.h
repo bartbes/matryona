@@ -17,11 +17,16 @@ public:
 	virtual std::size_t getLength() = 0;
 };
 
+// IOWindow maps onto another IO, and provided a (smaller) window into it.
+// We'll end up using IOWindows a lot, to easily provide IO-backed views into
+// the file.
 class IOWindow : public IO
 {
 public:
 	IOWindow();
 
+	// For technical reasons we want to have a default constructor,
+	// so initialise separately.
 	void init(IO *parent, std::size_t start, std::size_t length);
 	void init(IO *parent, std::size_t length);
 
@@ -37,10 +42,12 @@ private:
 	std::size_t pos;
 };
 
+// Helpers for variable-length EBML ints
 std::uint8_t readVintLength(IO *io);
 std::uint64_t readVint(IO *io);
 std::int64_t readSVint(IO *io);
 
+// Generic (non-efficient) endianness swapping
 template<typename T, unsigned int size = sizeof(T)>
 T swapEndianness(T value)
 {
@@ -54,6 +61,8 @@ T swapEndianness(T value)
 	return result;
 }
 
+// EBML also allows abbreviating fixed-size ints. So a 64-bit 5 can be stored as
+// one byte, without the leading zero bytes.
 template <typename T = std::uint64_t>
 T readUint(std::uint64_t len, IO *io)
 {
@@ -72,6 +81,7 @@ T readUint(std::uint64_t len, IO *io)
 	return swapEndianness(value);
 }
 
+// Blame C++ metaprogramming
 template <typename T>
 struct equivalent_sized_uint
 {
@@ -98,6 +108,7 @@ T readFloat(std::uint64_t len, IO *io)
 	return *reinterpret_cast<T*>(buffer);
 }
 
+// An IO backed by fopen, fread and friends
 class CIO : public IO
 {
 public:
@@ -114,6 +125,7 @@ private:
 	std::size_t length;
 };
 
+// An IO backed by a memory buffer
 class MemIO : public IO
 {
 public:

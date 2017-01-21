@@ -63,6 +63,8 @@ EBMLElementIterator &EBMLElementIterator::operator++()
 
 bool EBMLElementIterator::operator==(const EBMLElementIterator &other) const
 {
+	// No valid iterators ever match each other.
+	// It's weird, I know, but it's good enough.
 	if (isValid || other.isValid)
 		return false;
 	return true;

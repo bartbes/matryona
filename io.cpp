@@ -68,6 +68,9 @@ uint8_t readVintLength(IO *io)
 	if (io->read(reinterpret_cast<char*>(&value), 1) != 1)
 		throw IOError();
 
+	// One leading zero, followed by a one means two bytes
+	// Two zeroes, one one means 3 bytes
+	// So count the zeroes, add one
 	uint8_t length = 1;
 	while (length <= 8 && value >> (8-length) == 0)
 		++length;
@@ -102,6 +105,7 @@ uint64_t readVint(IO *io)
 
 int64_t readSVint(IO *io)
 {
+	// This is the list of values to subtract for a given length. No magic here.
 	static const int64_t subtr[8] = {
 		0x3F, 0x1FFF, 0x0FFFFF, 0x07FFFFFF,
 		0x03FFFFFFFF, 0x01FFFFFFFFFF,
